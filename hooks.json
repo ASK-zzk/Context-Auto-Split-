@@ -1,0 +1,12 @@
+{
+  "context-autosplit-guard": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "node scripts/context_guard.mjs",
+        "timeout": 5
+      }
+    ]
+  }
+}

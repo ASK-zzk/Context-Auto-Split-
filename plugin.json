@@ -1,0 +1,15 @@
+{
+  "name": "context-autosplit",
+  "displayName": "Context Auto-Split · 上下文自动分流多开",
+  "version": "1.2.1",
+  "author": "ASK-zzk",
+  "homepage": "https://github.com/ASK-zzk/Context-Auto-Split-",
+  "repository": "https://github.com/ASK-zzk/Context-Auto-Split-.git",
+  "description": "智能上下文保护与子对话自动多开插件：按任务复杂度与实时 Token 水位自动在当前大对话内开启独立子对话分流重任务，防止主对话上下文膨胀或撞墙。",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "把这项任务拆成多个子对话并行处理，主对话只汇总最终结果",
+    "检查当前对话的上下文水位和活跃子对话，决定是否需要分流",
+    "帮我调整 context-autosplit 插件的上下文警戒线和子对话分流策略"
+  ]
+}
