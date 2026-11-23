@@ -343,7 +343,7 @@ try {
     const threshTx = path.join(tmpRoot, "thresh.jsonl");
     writeTranscript(threshTx, [
       { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Read huge log" },
-      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", input_tokens: 30000, cache_read_tokens: 19500, output_tokens: 500 },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "claude-sonnet-4-6", input_tokens: 30000, cache_read_tokens: 19500, output_tokens: 500 },
       { step_index: 2, source: "MODEL", type: "GENERIC", content: "y".repeat(30000) },
     ]);
     assert.deepEqual(
@@ -357,7 +357,7 @@ try {
 
     writeTranscript(threshTx, [
       { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Read huge log" },
-      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", input_tokens: 55000, cache_read_tokens: 29000, output_tokens: 1000 },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "claude-sonnet-4-6", input_tokens: 55000, cache_read_tokens: 29000, output_tokens: 1000 },
     ]);
     const threshWarm = runGuard({
       stdinObj: { conversationId: threshConv, transcriptPath: threshTx, invocationNum: 2 },
@@ -733,7 +733,353 @@ try {
     assert.ok(explicitWarm.systemMessage.includes("210k / 512k (41%, model=gemini-4-neon-high)"));
   });
 
-  console.log(`\nSummary: ${passed}/13 tests passed.`);
+  // 14. >6MB transcript with >20KB step0 preserves child detection without falling back to tail steps[0]
+  runTest("14. >6MB transcript with >20KB step0 keeps child detection and triggers CHILD_CRITICAL at 155k", () => {
+    const hugePluginData = path.join(tmpRoot, "plugin_data_huge");
+    fs.mkdirSync(hugePluginData, { recursive: true });
+
+    // 14a: ~22KB line 0 (>16KB, <256KB) + >6MB padding
+    const hugeChildIdA = "14141414-1414-4141-8141-14141414141a";
+    const hugeTxA = path.join(tmpRoot, "huge_child_22k.jsonl");
+    const step0A = JSON.stringify({
+      step_index: 0,
+      source: "USER_EXPLICIT",
+      type: "USER_INPUT",
+      content: `[CONTEXT_AUTOSPLIT_CHILD] ${"a".repeat(22 * 1024)}`,
+    });
+    const padChunk = JSON.stringify({
+      step_index: 1,
+      source: "MODEL",
+      type: "GENERIC",
+      content: "p".repeat(120 * 1024),
+    });
+    const fdA = fs.openSync(hugeTxA, "w");
+    fs.writeSync(fdA, step0A + "\n");
+    for (let i = 0; i < 55; i++) {
+      fs.writeSync(fdA, padChunk + "\n");
+    }
+    fs.closeSync(fdA);
+    assert.ok(fs.statSync(hugeTxA).size > 6 * 1024 * 1024, "Expected > 6MB transcript");
+
+    // 90k and 135k on claude-sonnet-4-6 (200k) would trigger WARM/HIGH if misidentified as parent
+    fs.appendFileSync(
+      hugeTxA,
+      JSON.stringify({ step_index: 60, source: "MODEL", type: "PLANNER_RESPONSE", model: "claude-sonnet-4-6", input_tokens: 60000, cache_read_tokens: 29500, output_tokens: 500 }) + "\n",
+      "utf8"
+    );
+    assert.deepEqual(
+      runGuard({
+        stdinObj: { conversationId: hugeChildIdA, transcriptPath: hugeTxA, modelName: "claude-sonnet-4-6", invocationNum: 1 },
+        pluginDataDir: hugePluginData,
+      }),
+      {}
+    );
+
+    fs.appendFileSync(
+      hugeTxA,
+      JSON.stringify({ step_index: 61, source: "MODEL", type: "PLANNER_RESPONSE", model: "claude-sonnet-4-6", input_tokens: 90000, cache_read_tokens: 44000, output_tokens: 1000 }) + "\n",
+      "utf8"
+    );
+    assert.deepEqual(
+      runGuard({
+        stdinObj: { conversationId: hugeChildIdA, transcriptPath: hugeTxA, modelName: "claude-sonnet-4-6", invocationNum: 2 },
+        pluginDataDir: hugePluginData,
+      }),
+      {}
+    );
+
+    fs.appendFileSync(
+      hugeTxA,
+      JSON.stringify({ step_index: 62, source: "MODEL", type: "PLANNER_RESPONSE", model: "claude-sonnet-4-6", input_tokens: 100000, cache_read_tokens: 54000, output_tokens: 1000 }) + "\n",
+      "utf8"
+    );
+    const wrapHugeA = getInjected(
+      runGuard({
+        stdinObj: { conversationId: hugeChildIdA, transcriptPath: hugeTxA, modelName: "claude-sonnet-4-6", invocationNum: 3 },
+        pluginDataDir: hugePluginData,
+      })
+    );
+    assert.match(wrapHugeA.systemMessage, /LEVEL=CHILD_CRITICAL/);
+
+    // 14b: >270KB line 0 (>256KB head cap) + >6MB padding still extracts synthetic step0 marker
+    const hugeChildIdB = "14141414-1414-4141-8141-14141414141b";
+    const hugeTxB = path.join(tmpRoot, "huge_child_270k.jsonl");
+    const step0B = JSON.stringify({
+      step_index: 0,
+      source: "USER_EXPLICIT",
+      type: "USER_INPUT",
+      content: `[CONTEXT_AUTOSPLIT_CHILD] ${"b".repeat(270 * 1024)}`,
+    });
+    const fdB = fs.openSync(hugeTxB, "w");
+    fs.writeSync(fdB, step0B + "\n");
+    for (let i = 0; i < 52; i++) {
+      fs.writeSync(fdB, padChunk + "\n");
+    }
+    fs.closeSync(fdB);
+    assert.ok(fs.statSync(hugeTxB).size > 6 * 1024 * 1024, "Expected > 6MB transcript for 14b");
+
+    fs.appendFileSync(
+      hugeTxB,
+      JSON.stringify({ step_index: 60, source: "MODEL", type: "PLANNER_RESPONSE", model: "claude-sonnet-4-6", input_tokens: 90000, cache_read_tokens: 44000, output_tokens: 1000 }) + "\n",
+      "utf8"
+    );
+    assert.deepEqual(
+      runGuard({
+        stdinObj: { conversationId: hugeChildIdB, transcriptPath: hugeTxB, modelName: "claude-sonnet-4-6", invocationNum: 1 },
+        pluginDataDir: hugePluginData,
+      }),
+      {}
+    );
+
+    fs.appendFileSync(
+      hugeTxB,
+      JSON.stringify({ step_index: 61, source: "MODEL", type: "PLANNER_RESPONSE", model: "claude-sonnet-4-6", input_tokens: 100000, cache_read_tokens: 54000, output_tokens: 1000 }) + "\n",
+      "utf8"
+    );
+    const wrapHugeB = getInjected(
+      runGuard({
+        stdinObj: { conversationId: hugeChildIdB, transcriptPath: hugeTxB, modelName: "claude-sonnet-4-6", invocationNum: 2 },
+        pluginDataDir: hugePluginData,
+      })
+    );
+    assert.match(wrapHugeB.systemMessage, /LEVEL=CHILD_CRITICAL/);
+  });
+
+  // 15. Strict anchored subagent UUID extraction prevents unrelated/leaked UUIDs from entering children.json
+  runTest("15. Subagent UUID extraction rejects unanchored and stale-turn UUIDs, accepts anchored UUIDs", () => {
+    const uuidPluginData = path.join(tmpRoot, "plugin_data_uuid");
+    fs.mkdirSync(uuidPluginData, { recursive: true });
+    const parentId = "15151515-1515-4151-8151-151515151515";
+    const txPath = path.join(tmpRoot, "uuid_anchoring.jsonl");
+
+    const unanchored1 = "deadbeef-0001-4001-8001-000000000001";
+    const unanchored2 = "deadbeef-0002-4002-8002-000000000002";
+    const leakedNextTurn = "deadbeef-0003-4003-8003-000000000003";
+    const validKeyChild = "cafe1111-1111-4111-8111-111111111111";
+    const validSubagentLineChild = "cafe2222-2222-4222-8222-222222222222";
+
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Spawn workers safely" },
+      {
+        step_index: 1,
+        source: "MODEL",
+        type: "PLANNER_RESPONSE",
+        model: "claude-sonnet-4-6",
+        input_tokens: 30000,
+        cache_read_tokens: 10000,
+        output_tokens: 300,
+        tool_calls: [{ name: "invoke_subagent", args: { Role: '"Alpha"', TypeName: '"context-researcher"' } }],
+      },
+      {
+        step_index: 2,
+        source: "MODEL",
+        type: "GENERIC",
+        content: `Unrelated request_id=${unanchored1}\nTrace uuid: ${unanchored2}`,
+      },
+      {
+        step_index: 3,
+        source: "MODEL",
+        type: "GENERIC",
+        content: `{"status":"ok","conversationId":"${validKeyChild}"}`,
+      },
+      {
+        step_index: 4,
+        source: "MODEL",
+        type: "PLANNER_RESPONSE",
+        model: "claude-sonnet-4-6",
+        input_tokens: 40000,
+        cache_read_tokens: 15000,
+        output_tokens: 300,
+        tool_calls: [{ name: "invoke_subagent", args: { Role: '"FailedCall"', TypeName: '"context-worker"' } }],
+      },
+      {
+        step_index: 5,
+        source: "MODEL",
+        type: "GENERIC",
+        content: "Tool execution failed before creating child",
+      },
+      {
+        step_index: 6,
+        source: "MODEL",
+        type: "PLANNER_RESPONSE",
+        model: "claude-sonnet-4-6",
+        input_tokens: 50000,
+        cache_read_tokens: 20000,
+        output_tokens: 300,
+      },
+      {
+        step_index: 7,
+        source: "MODEL",
+        type: "GENERIC",
+        content: `Tool log mentioned conversationId: ${leakedNextTurn} and subagent ${leakedNextTurn}`,
+      },
+      {
+        step_index: 8,
+        source: "MODEL",
+        type: "PLANNER_RESPONSE",
+        model: "claude-sonnet-4-6",
+        input_tokens: 60000,
+        cache_read_tokens: 25000,
+        output_tokens: 300,
+        tool_calls: [{ name: "invoke_subagent", args: { Role: '"Beta"', TypeName: '"context-worker"' } }],
+      },
+      {
+        step_index: 9,
+        source: "MODEL",
+        type: "GENERIC",
+        content: `Unrelated line with ${unanchored2}\nSpawned subagent ${validSubagentLineChild} ready`,
+      },
+      {
+        step_index: 10,
+        source: "MODEL",
+        type: "PLANNER_RESPONSE",
+        model: "claude-sonnet-4-6",
+        input_tokens: 80000,
+        cache_read_tokens: 54000,
+        output_tokens: 1000,
+      },
+    ]);
+
+    const highMsg = getInjected(
+      runGuard({
+        stdinObj: { conversationId: parentId, transcriptPath: txPath, modelName: "claude-sonnet-4-6", invocationNum: 1 },
+        pluginDataDir: uuidPluginData,
+      })
+    );
+    assert.match(highMsg.systemMessage, /LEVEL=HIGH/);
+    assert.ok(highMsg.systemMessage.includes(validKeyChild));
+    assert.ok(highMsg.systemMessage.includes(validSubagentLineChild));
+    assert.ok(!highMsg.systemMessage.includes(unanchored1));
+    assert.ok(!highMsg.systemMessage.includes(unanchored2));
+    assert.ok(!highMsg.systemMessage.includes(leakedNextTurn));
+
+    const childrenJson = JSON.parse(fs.readFileSync(path.join(uuidPluginData, "children.json"), "utf8"));
+    assert.deepEqual(Object.keys(childrenJson).sort(), [validKeyChild, validSubagentLineChild].sort());
+    assert.equal(childrenJson[validKeyChild].role, "Alpha");
+    assert.equal(childrenJson[validSubagentLineChild].role, "Beta");
+  });
+
+  // 16. autoCalibrateFromCompaction supports upward expansion (512k default -> 850k observed)
+  runTest("16. autoCalibrateFromCompaction expands unlisted model from 512k default to 850k observed ceiling", () => {
+    const expPluginData = path.join(tmpRoot, "plugin_data_expand");
+    fs.mkdirSync(expPluginData, { recursive: true });
+    const convId = "16161616-1616-4161-8161-161616161616";
+    const txPath = path.join(tmpRoot, "expand.jsonl");
+
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Start unlisted model" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "new-frontier-model-x", input_tokens: 140000, cache_read_tokens: 69000, output_tokens: 1000 },
+    ]);
+    const initialWarm = getInjected(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "new-frontier-model-x", invocationNum: 1 },
+        pluginDataDir: expPluginData,
+      })
+    );
+    assert.match(initialWarm.systemMessage, /LEVEL=WARM/);
+    assert.ok(initialWarm.systemMessage.includes("210k / 512k (41%, model=new-frontier-model-x)"));
+
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Reach 850k before compaction" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "new-frontier-model-x", input_tokens: 550000, cache_read_tokens: 299000, output_tokens: 1000 },
+    ]);
+    const preCompactCrit = getInjected(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "new-frontier-model-x", invocationNum: 2 },
+        pluginDataDir: expPluginData,
+      })
+    );
+    assert.match(preCompactCrit.systemMessage, /LEVEL=CRITICAL/);
+
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Compacted to 100k" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "new-frontier-model-x", input_tokens: 70000, cache_read_tokens: 29500, output_tokens: 500 },
+    ]);
+    assert.deepEqual(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "new-frontier-model-x", invocationNum: 3 },
+        pluginDataDir: expPluginData,
+      }),
+      {}
+    );
+
+    const observed = JSON.parse(fs.readFileSync(path.join(expPluginData, "observed_windows.json"), "utf8"));
+    assert.equal(observed["new-frontier-model-x"].ceiling, 850000);
+
+    // 300k is 35% of 850k -> silent
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Grow to 300k" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "new-frontier-model-x", input_tokens: 200000, cache_read_tokens: 99000, output_tokens: 1000 },
+    ]);
+    assert.deepEqual(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "new-frontier-model-x", invocationNum: 4 },
+        pluginDataDir: expPluginData,
+      }),
+      {}
+    );
+
+    // 360k is 42% of 850k -> WARM
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Grow to 360k" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "new-frontier-model-x", input_tokens: 250000, cache_read_tokens: 109000, output_tokens: 1000 },
+    ]);
+    const expandedWarm = getInjected(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "new-frontier-model-x", invocationNum: 5 },
+        pluginDataDir: expPluginData,
+      })
+    );
+    assert.match(expandedWarm.systemMessage, /LEVEL=WARM/);
+    assert.ok(expandedWarm.systemMessage.includes("360k / 850k (42%, model=new-frontier-model-x)"));
+  });
+
+  // 17. Switching to a strictly larger window resets stale CRITICAL so new WARM/HIGH fire properly
+  runTest("17. Switching from 512k CRITICAL to 1M triggers WARM at 42% and HIGH at 66%", () => {
+    const swPluginData = path.join(tmpRoot, "plugin_data_switch_large");
+    fs.mkdirSync(swPluginData, { recursive: true });
+    const convId = "17171717-1717-4171-8171-171717171717";
+    const txPath = path.join(tmpRoot, "switch_large.jsonl");
+
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "High usage on Neon 512k" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-neon-high", input_tokens: 300000, cache_read_tokens: 139000, output_tokens: 1000 },
+    ]);
+    const neonCrit = getInjected(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "gemini-4-neon-high", invocationNum: 1 },
+        pluginDataDir: swPluginData,
+      })
+    );
+    assert.match(neonCrit.systemMessage, /LEVEL=CRITICAL/);
+    assert.ok(neonCrit.systemMessage.includes("440k / 512k (86%, model=gemini-4-neon-high)"));
+
+    // Switch to Argon 1M at 440k (42%) -> must reset old CRITICAL and fire WARM immediately
+    const argonWarm = getInjected(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "gemini-4-argon-medium", invocationNum: 2 },
+        pluginDataDir: swPluginData,
+      })
+    );
+    assert.match(argonWarm.systemMessage, /LEVEL=WARM/);
+    assert.ok(argonWarm.systemMessage.includes("440k / 1M (42%, model=gemini-4-argon-medium)"));
+
+    // Grow to 690k (66%) -> must fire HIGH
+    writeTranscript(txPath, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Grow on Argon 1M" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-argon-medium", input_tokens: 450000, cache_read_tokens: 239000, output_tokens: 1000 },
+    ]);
+    const argonHigh = getInjected(
+      runGuard({
+        stdinObj: { conversationId: convId, transcriptPath: txPath, modelName: "gemini-4-argon-medium", invocationNum: 3 },
+        pluginDataDir: swPluginData,
+      })
+    );
+    assert.match(argonHigh.systemMessage, /LEVEL=HIGH/);
+    assert.ok(argonHigh.systemMessage.includes("690k / 1M (66%, model=gemini-4-argon-medium)"));
+  });
+
+  console.log(`\nSummary: ${passed}/17 tests passed.`);
 } finally {
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 }

@@ -9,9 +9,12 @@ const CONFIG_PATH = process.env.CONTEXT_AUTOSPLIT_CONFIG_PATH || path.join(PLUGI
 
 const MAX_FULL_READ_BYTES = 6 * 1024 * 1024;
 const HEAD_READ_BYTES = 16 * 1024;
+const MAX_HEAD_READ_BYTES = 256 * 1024;
 const TAIL_READ_BYTES = 4 * 1024 * 1024;
 const CHILD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const CHILD_KEY_UUID_RE =
+  /"?(?:conversationId|conversation_id|subagentId|subagent_id)"?\s*[:=]\s*"?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"?/gi;
 
 const TIER_RANK = {
   normal: 0,
@@ -25,7 +28,7 @@ const DEFAULT_CONFIG = {
   enabled: true,
   mode: "hybrid",
   thresholdMode: "percent",
-  defaultWindowTokens: 200000,
+  defaultWindowTokens: 512000,
   autoCalibrateFromCompaction: true,
   modelWindows: {
     "gemini-4-neon": 512000,
@@ -224,6 +227,44 @@ function unquoteArg(val) {
   return trimmed;
 }
 
+function readFirstLine(fd, fileSize) {
+  const limit = Math.min(fileSize, MAX_HEAD_READ_BYTES);
+  const chunks = [];
+  let offset = 0;
+
+  while (offset < limit) {
+    const len = Math.min(HEAD_READ_BYTES, limit - offset);
+    const buf = Buffer.allocUnsafe(len);
+    const bytesRead = fs.readSync(fd, buf, 0, len, offset);
+    if (bytesRead <= 0) break;
+    const slice = bytesRead < len ? buf.subarray(0, bytesRead) : buf;
+    const nlIdx = slice.indexOf(0x0a);
+    if (nlIdx >= 0) {
+      chunks.push(slice.subarray(0, nlIdx));
+      break;
+    }
+    chunks.push(slice);
+    offset += bytesRead;
+  }
+
+  const headStr = Buffer.concat(chunks).toString("utf8");
+  const parsed = parseJsonLine(headStr);
+  if (parsed) return parsed;
+  if (!headStr.trim()) return null;
+
+  const typeMatch = headStr.match(/(?<!\\)"type"\s*:\s*"([^"\\]+)"/);
+  const sourceMatch = headStr.match(/(?<!\\)"source"\s*:\s*"([^"\\]+)"/);
+  const hasMarker = headStr.includes("[CONTEXT_AUTOSPLIT_CHILD]");
+  if (!typeMatch && !sourceMatch && !hasMarker) {
+    return null;
+  }
+  return {
+    type: typeMatch ? typeMatch[1] : undefined,
+    source: sourceMatch ? sourceMatch[1] : undefined,
+    content: hasMarker ? "[CONTEXT_AUTOSPLIT_CHILD]" : "",
+  };
+}
+
 function readTranscriptSlices(transcriptPath) {
   let stat;
   try {
@@ -248,13 +289,7 @@ function readTranscriptSlices(transcriptPath) {
   let fd;
   try {
     fd = fs.openSync(transcriptPath, "r");
-    const headLen = Math.min(HEAD_READ_BYTES, stat.size);
-    const headBuf = Buffer.allocUnsafe(headLen);
-    fs.readSync(fd, headBuf, 0, headLen, 0);
-    const headStr = headBuf.toString("utf8");
-    const headFirstNl = headStr.indexOf("\n");
-    const firstLine = headFirstNl >= 0 ? headStr.slice(0, headFirstNl) : headStr;
-    const step0 = parseJsonLine(firstLine);
+    const step0 = readFirstLine(fd, stat.size);
 
     const tailLen = Math.min(TAIL_READ_BYTES, stat.size);
     const tailOffset = stat.size - tailLen;
@@ -270,7 +305,7 @@ function readTranscriptSlices(transcriptPath) {
       const obj = parseJsonLine(line);
       if (obj) steps.push(obj);
     }
-    return { step0: step0 || steps[0] || null, steps };
+    return { step0, steps };
   } finally {
     if (fd !== undefined) {
       try {
@@ -314,12 +349,23 @@ function inspectTranscript(transcriptPath, conversationId) {
           pendingSubagentCalls.shift();
         }
         if (pendingSubagentCalls.length > 0) {
-          const matches = s.content.match(UUID_RE) || [];
           const uniqueInStep = [];
-          for (const rawId of matches) {
+          const pushCandidate = (rawId) => {
             const norm = rawId.toLowerCase();
             if (norm !== selfLower && !uniqueInStep.includes(norm)) {
               uniqueInStep.push(norm);
+            }
+          };
+          for (const m of s.content.matchAll(CHILD_KEY_UUID_RE)) {
+            if (m[1]) pushCandidate(m[1]);
+          }
+          if (uniqueInStep.length === 0) {
+            for (const line of s.content.split(/\r?\n/)) {
+              if (/subagent/i.test(line)) {
+                for (const rawId of line.match(UUID_RE) || []) {
+                  pushCandidate(rawId);
+                }
+              }
             }
           }
           for (const childNorm of uniqueInStep) {
@@ -339,6 +385,7 @@ function inspectTranscript(transcriptPath, conversationId) {
     }
 
     if (s.type === "PLANNER_RESPONSE") {
+      pendingSubagentCalls.length = 0;
       if (typeof s.model === "string" && s.model.trim()) {
         lastModel = s.model.trim();
       }
@@ -418,7 +465,7 @@ function resolveModelWindow(activeModel, config, observedWindows) {
   ) {
     const entry = observedWindows[lower];
     const ceiling = entry && typeof entry === "object" ? Number(entry.ceiling) : Number(entry);
-    if (Number.isFinite(ceiling) && ceiling > 0 && ceiling < windowTokens) {
+    if (Number.isFinite(ceiling) && ceiling >= 32000) {
       return ceiling;
     }
   }
@@ -670,9 +717,9 @@ async function main() {
     convState.peakTokens = Math.max(prevPeak, stats.currentTokens);
   }
 
-  // Model window switch reset (when new window drops usage below warm)
+  // Model window switch reset (reset stale tier when moving to a strictly larger window)
   const prevWindow = Number(convState.lastWindowTokens) || 0;
-  if (prevWindow > 0 && prevWindow !== activeWindow && stats.currentTokens < effectiveThresholds.warm) {
+  if (prevWindow > 0 && activeWindow > prevWindow) {
     convState.lastTier = "normal";
     convState.lastAlertTokens = 0;
     convState.lastBurstUserStepIdx = -1;

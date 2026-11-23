@@ -2,7 +2,7 @@
   "enabled": true,
   "mode": "hybrid",
   "thresholdMode": "percent",
-  "defaultWindowTokens": 200000,
+  "defaultWindowTokens": 512000,
   "autoCalibrateFromCompaction": true,
   "modelWindows": {
     "gemini-4-neon": 512000,
