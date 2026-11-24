@@ -47,7 +47,7 @@ Edit `~/.gemini/config/plugins/context-autosplit/config.json`. Changes take effe
 | `thresholdMode` | `"percent"` | `"percent"` (scale thresholds dynamically by active model window) or `"tokens"` (legacy fixed-token mode using `windowTokens`, `thresholds`, `burstMinTokens`, `reAlertDeltaTokens`). |
 | `defaultWindowTokens` | `512000` | Fallback context window (`512K`) when active model is unknown or does not match `modelWindows`. |
 | `autoCalibrateFromCompaction` | `true` | For models without a specific override (matching only generic `"gemini"` / `"claude"` or unmatched), bidirectionally learn practical window ceilings (expanding above or shrinking below `defaultWindowTokens`) from historical compaction peaks in `transcript.jsonl` (`observed_windows.json`). Explicitly pinned models are never overridden; switching to a strictly larger window immediately resets stale alert tiers. |
-| `modelWindows` | map | Longest-key-first case-insensitive substring map from model name to window tokens (`gemini-4-neon: 512000`, `gemini-4-hydrogen: 512000`, `gemini-4-argon: 1048576`, `gemini: 1000000`, `claude-opus-5-5`/`claude-sonnet-5-5`/`claude-*-1m`: `1000000`, `claude: 200000`, `gemma`/`litert`: `64000`, `gpt-4.1: 1000000`, `gpt-5: 400000`, `o3`/`o4: 200000`, `gpt-4o`/`gpt-oss: 128000`). |
+| `modelWindows` | map | Longest-key-first case-insensitive substring map from model name to window tokens (`gemini-4-neon: 512000`, `gemini-4-hydrogen: 512000`, `gemini-4-carbon: 512000`, `gemini-4-argon: 1048576`, `gemini: 1000000`, `claude-opus-5-5`/`claude-sonnet-5-5`/`claude-*-1m`: `1000000`, `claude: 200000`, `gemma`/`litert`: `64000`, `gpt-4.1: 1000000`, `gpt-5: 400000`, `o3`/`o4: 200000`, `gpt-4o`/`gpt-oss: 128000`). |
 | `thresholdPercents.burstMin` | `20` | Minimum percentage floor before single-turn heavy tool output triggers `BURST`. |
 | `thresholdPercents.warm` | `40` | Triggers `WARM` proactive offload directive. |
 | `thresholdPercents.high` | `65` | Triggers `HIGH` strict orchestrator-only mode (including `run_command` build/test offloading). |
@@ -62,7 +62,7 @@ Edit `~/.gemini/config/plugins/context-autosplit/config.json`. Changes take effe
 | `models.lightweight` | `"flash"` | Model hint for `context-researcher`. |
 
 **Effective threshold examples (`thresholdMode: "percent"`)**:
-- **Gemini 4 Neon / Hydrogen (`512k`)**: `WARM 205k` / `HIGH 333k` / `CRITICAL 435k` (child wrap-up `150k`)
+- **Gemini 4 Neon / Hydrogen / Carbon (`512k`)**: `WARM 205k` / `HIGH 333k` / `CRITICAL 435k` (child wrap-up `150k`)
 - **Gemini 4 Argon / Claude 5.5 (`~1M`)**: `WARM ~400k–419k` / `HIGH ~650k–682k` / `CRITICAL ~850k–891k` (child wrap-up `150k`)
 - **Claude 4.6 (`200k`)**: `WARM 80k` / `HIGH 130k` / `CRITICAL 170k` (child wrap-up `150k`)
 - **Local LiteRT / Gemma (`64k`)**: `WARM 25.6k` / `HIGH 41.6k` / `CRITICAL 54.4k` (child wrap-up `48k`)

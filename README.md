@@ -5,7 +5,7 @@
 <h1 align="center">Context Auto-Split · 上下文自动分流多开插件</h1>
 
 <p align="center">
-  <strong>Google Antigravity 智能上下文保护与嵌套子对话自动分流插件（v1.2.2）</strong><br/>
+  <strong>Google Antigravity 智能上下文保护与嵌套子对话自动分流插件（v1.2.3）</strong><br/>
   零外部依赖（仅需 Node.js） · 零额外 LLM 调用开销 · 按当前活跃模型窗口百分比动态守护
 </p>
 
@@ -17,7 +17,7 @@
 
 - **上下文滚雪球**：主对话背着庞大的历史上下文继续走工具调用，导致高配主模型缓存读/计算成本飙升、响应变慢；
 - **频繁触发 `/compact` 失忆**：早期关键约束和代码细节在压缩摘要中丢失，引发反复返工；
-- **不同模型窗口差异大**：例如 Antigravity 中 `Gemini 4 Neon` / `Gemini 4 Hydrogen` 为 `512K`、`Gemini 4 Argon` / `Claude 5.5` 为 `1M`、`Claude 4.6` 为 `200K`、`Local LiteRT / Gemma` 仅 `64K`，静态写死的阈值要么对大窗口过早报警，要么对小窗口保护太晚。
+- **不同模型窗口差异大**：例如 Antigravity 中 `Gemini 4 Neon` / `Gemini 4 Hydrogen` / `Gemini 4 Carbon` 为 `512K`、`Gemini 4 Argon` / `Claude 5.5` 为 `1M`、`Claude 4.6` 为 `200K`、`Local LiteRT / Gemma` 仅 `64K`，静态写死的阈值要么对大窗口过早报警，要么对小窗口保护太晚。
 
 **Context Auto-Split** 通过「**主从上下文隔离架构 + `PreInvocation` 实时 Token 水位守护 + 模型自适应校准**」，在不新建割裂会话的前提下，将重型读写与试错过程自动卸载到当前大对话内部的独立子对话（Subagent）中消化，让主对话始终保持轻量、清醒与可调度。
 
@@ -74,7 +74,7 @@
 
 | 模型系列（匹配键） | 默认窗口上限 | `WARM` (40%) | `HIGH` (65%) | `CRITICAL` (85%) | 来源与备注 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`gemini-4-neon` / `gemini-4-hydrogen`** | `512K` (`512,000`) | `205k` | `333k` | `435k` | Neon 核实自官网 `/docs/models`，Hydrogen 按用户实测锁定（显式锁定） |
+| **`gemini-4-neon` / `gemini-4-hydrogen` / `gemini-4-carbon`** | `512K` (`512,000`) | `205k` | `333k` | `435k` | Neon 核实自官网 `/docs/models`，Hydrogen 与 Carbon 按用户实测锁定（显式锁定） |
 | **`gemini-4-argon`** | `1M` (`1,048,576`) | `419k` | `682k` | `891k` | 核实自 Antigravity `/docs/cli/statusline.md`（显式锁定） |
 | **`claude-opus-5-5` / `claude-sonnet-5-5`** | `1M` (`1,000,000`) | `400k` | `650k` | `850k` | 核实自关联 Cloud 文档（显式锁定） |
 | **`claude-*-1m`** | `1M` (`1,000,000`) | `400k` | `650k` | `850k` | 长上下文 1M 变体（显式锁定） |
@@ -87,8 +87,8 @@
 | **`gemini`** / 未收录模型 | `1M` / `512K` | 动态 | 动态 | 动态 | 泛化兜底 + 支持双向压缩校准 |
 
 - **压缩上限自校准（`autoCalibrateFromCompaction`）**：
-  - 对于官网未公布具体上限、仅命中泛化键（`"gemini"` / `"claude"`）或未命中任何键的模型（例如 `gemini-4-carbon-*` 或全新未知模型），一旦主对话发生压缩回落（当前 Token 降至峰值 `65%` 以下且此前峰值 `≥ 32k`），脚本会把压缩前的峰值记入状态目录的 `observed_windows.json`（保留最近 5 次并取中位数 `ceiling`）。只要实测 `ceiling ≥ 32k`，无论高于还是低于默认兜底窗口（支持**向上扩展**与**向下收缩**双向自校准），后续均自动按实测上限计算百分比。
-  - **显式钉死的型号键（如 `gemini-4-neon`、`gemini-4-hydrogen`、`gemini-4-argon`）永远不会被通用校准覆盖**。
+  - 对于官网未公布具体上限、仅命中泛化键（`"gemini"` / `"claude"`）或未命中任何键的模型（例如 `gemini-4-xenon-*` 或全新未知模型），一旦主对话发生压缩回落（当前 Token 降至峰值 `65%` 以下且此前峰值 `≥ 32k`），脚本会把压缩前的峰值记入状态目录的 `observed_windows.json`（保留最近 5 次并取中位数 `ceiling`）。只要实测 `ceiling ≥ 32k`，无论高于还是低于默认兜底窗口（支持**向上扩展**与**向下收缩**双向自校准），后续均自动按实测上限计算百分比。
+  - **显式钉死的型号键（如 `gemini-4-neon`、`gemini-4-hydrogen`、`gemini-4-carbon`、`gemini-4-argon`）永远不会被通用校准覆盖**。
 - **中途切换模型自适应**：若从大窗口（如 `512k`/`1M`）切到小窗口（如 `200k`），占比升高会立即触发对应高水位提醒；若从较小窗口切往严格更大的窗口（如 `512k` 切往 `1M`），会立即重置旧警戒层级与冷却记录，确保新窗口下的 `WARM`/`HIGH` 提醒不被旧的小窗口状态抑制。
 - **`/compact` 重置**：一旦检测到 Token 跌破峰值的 `65%`（`compactDropRatio`），自动将水位重置为 `normal`，避免压缩后仍卡在 `CRITICAL` 状态。
 

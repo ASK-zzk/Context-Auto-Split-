@@ -33,6 +33,7 @@ const DEFAULT_CONFIG = {
   modelWindows: {
     "gemini-4-neon": 512000,
     "gemini-4-hydrogen": 512000,
+    "gemini-4-carbon": 512000,
     "gemini-4-argon": 1048576,
     gemini: 1000000,
     "claude-opus-5-5": 1000000,

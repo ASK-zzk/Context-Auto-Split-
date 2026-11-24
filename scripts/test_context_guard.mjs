@@ -458,6 +458,22 @@ try {
     assert.match(hydroWarm.systemMessage, /LEVEL=WARM/);
     assert.ok(hydroWarm.systemMessage.includes("210k / 512k (41%, model=gemini-4-hydrogen-xhigh)"));
 
+    // Carbon 512k: 210k (41%) triggers WARM
+    const carbonPinnedConv = "77777775-7777-4777-8777-777777777775";
+    const carbonPinnedTx = path.join(tmpRoot, "carbon_pinned.jsonl");
+    writeTranscript(carbonPinnedTx, [
+      { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Carbon warm" },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-carbon-high", input_tokens: 140000, cache_read_tokens: 69000, output_tokens: 1000 },
+    ]);
+    const carbonWarm = getInjected(
+      runGuard({
+        stdinObj: { conversationId: carbonPinnedConv, transcriptPath: carbonPinnedTx, modelName: "gemini-4-carbon-high", invocationNum: 1 },
+        pluginDataDir: pluginData,
+      })
+    );
+    assert.match(carbonWarm.systemMessage, /LEVEL=WARM/);
+    assert.ok(carbonWarm.systemMessage.includes("210k / 512k (41%, model=gemini-4-carbon-high)"));
+
     // Argon 1,048,576 (~1M): 350k silent, 430k WARM
     const argonConv = "77777778-7777-4777-8777-777777777778";
     const argonTx = path.join(tmpRoot, "argon.jsonl");
@@ -653,50 +669,50 @@ try {
     const calPluginData = path.join(tmpRoot, "plugin_data_cal");
     fs.mkdirSync(calPluginData, { recursive: true });
 
-    // 13a: unlisted gemini-4-carbon-high (generic "gemini" 1M) compacts 500k -> 60k, learns 500k, triggers WARM at 210k (42%)
-    const carbonConv = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
-    const carbonTx = path.join(tmpRoot, "carbon.jsonl");
-    writeTranscript(carbonTx, [
+    // 13a: unlisted gemini-4-xenon-high (generic "gemini" 1M) compacts 500k -> 60k, learns 500k, triggers WARM at 210k (42%)
+    const xenonConv = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const xenonTx = path.join(tmpRoot, "xenon.jsonl");
+    writeTranscript(xenonTx, [
       { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Grow on unlisted model" },
-      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-carbon-high", input_tokens: 350000, cache_read_tokens: 149000, output_tokens: 1000 },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-xenon-high", input_tokens: 350000, cache_read_tokens: 149000, output_tokens: 1000 },
     ]);
     const preCompactWarm = getInjected(
       runGuard({
-        stdinObj: { conversationId: carbonConv, transcriptPath: carbonTx, modelName: "gemini-4-carbon-high", invocationNum: 1 },
+        stdinObj: { conversationId: xenonConv, transcriptPath: xenonTx, modelName: "gemini-4-xenon-high", invocationNum: 1 },
         pluginDataDir: calPluginData,
       })
     );
     assert.match(preCompactWarm.systemMessage, /LEVEL=WARM/);
-    assert.ok(preCompactWarm.systemMessage.includes("500k / 1M (50%, model=gemini-4-carbon-high)"));
+    assert.ok(preCompactWarm.systemMessage.includes("500k / 1M (50%, model=gemini-4-xenon-high)"));
 
-    writeTranscript(carbonTx, [
+    writeTranscript(xenonTx, [
       { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Compacted" },
-      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-carbon-high", input_tokens: 40000, cache_read_tokens: 19500, output_tokens: 500 },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-xenon-high", input_tokens: 40000, cache_read_tokens: 19500, output_tokens: 500 },
     ]);
     assert.deepEqual(
       runGuard({
-        stdinObj: { conversationId: carbonConv, transcriptPath: carbonTx, modelName: "gemini-4-carbon-high", invocationNum: 2 },
+        stdinObj: { conversationId: xenonConv, transcriptPath: xenonTx, modelName: "gemini-4-xenon-high", invocationNum: 2 },
         pluginDataDir: calPluginData,
       }),
       {}
     );
 
     const observed = JSON.parse(fs.readFileSync(path.join(calPluginData, "observed_windows.json"), "utf8"));
-    assert.equal(observed["gemini-4-carbon-high"].ceiling, 500000);
-    assert.deepEqual(observed["gemini-4-carbon-high"].samples, [500000]);
+    assert.equal(observed["gemini-4-xenon-high"].ceiling, 500000);
+    assert.deepEqual(observed["gemini-4-xenon-high"].samples, [500000]);
 
-    writeTranscript(carbonTx, [
+    writeTranscript(xenonTx, [
       { step_index: 0, source: "USER_EXPLICIT", type: "USER_INPUT", content: "Grow again after calibration" },
-      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-carbon-high", input_tokens: 140000, cache_read_tokens: 69000, output_tokens: 1000 },
+      { step_index: 1, source: "MODEL", type: "PLANNER_RESPONSE", model: "gemini-4-xenon-high", input_tokens: 140000, cache_read_tokens: 69000, output_tokens: 1000 },
     ]);
     const calibratedWarm = getInjected(
       runGuard({
-        stdinObj: { conversationId: carbonConv, transcriptPath: carbonTx, modelName: "gemini-4-carbon-high", invocationNum: 3 },
+        stdinObj: { conversationId: xenonConv, transcriptPath: xenonTx, modelName: "gemini-4-xenon-high", invocationNum: 3 },
         pluginDataDir: calPluginData,
       })
     );
     assert.match(calibratedWarm.systemMessage, /LEVEL=WARM/);
-    assert.ok(calibratedWarm.systemMessage.includes("210k / 500k (42%, model=gemini-4-carbon-high)"));
+    assert.ok(calibratedWarm.systemMessage.includes("210k / 500k (42%, model=gemini-4-xenon-high)"));
 
     // 13b: explicit gemini-4-neon-high is never overridden by observed_windows.json
     const observedPath = path.join(calPluginData, "observed_windows.json");
